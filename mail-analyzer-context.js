@@ -12,7 +12,7 @@ var watson = require('watson-developer-cloud');
 var GoogleContacts = require('google-contacts').GoogleContacts;
 
 var TASK_REGEX = /.*task.*/;
-var MAX_ITERATIONS = 2;
+var MAX_ITERATIONS = 30;
 
 var alchemy, cioClient, googleContacts;
 var threadStore;
@@ -22,11 +22,20 @@ var debugStart, debugEnd;
 function init() {
     initDates();
 
+    threadStore = {
+        numOfThreads: 0,
+        questions: [],
+        discussions: []
+    };
+
     googleContacts = new GoogleContacts({
-        token: ''
+        token: 'ya29..ugLgssFyC-I8u3nLnZFE9S8ISIb8oBZMcg9vXAiuMlHyLHOj5ESEA5GpcDcSd3vsRQ'
     });
 
     cioClient = ContextIO({
+        key: 'b4b3pif1',
+        secret: 'VPFa8U4jWbi79bgP',
+        version: '2.0'
     });
 
     return cioClient.accounts('5708ecd4ca2712cc3f8b4569').get().then(
@@ -60,10 +69,11 @@ function initContacts() {
 }
 
 function fetchThreads() {
-    var messages = [];
     var iteration = 0;
 
     function fetch(offset) {
+        console.log('Fetching offset:', offset);
+
         iteration++;
 
         var params = {
@@ -76,20 +86,16 @@ function fetchThreads() {
         return cioClient.
             accounts(account.id).
             messages().
-            get(params).then(
-                function() {
-                }
-            ).then(
+            get(params).then(parseThreads).then(
                 function(results) {
                     console.log('# of results:', results.length);
-                    messages = messages.concat(results);
 
-                    if (messages.length < totalMessages && iteration < MAX_ITERATIONS) {
-                        return fetch(messages.length + 100);
+                    if (threadStore.numOfThreads < totalMessages && iteration < MAX_ITERATIONS) {
+                        return fetch(threadStore.numOfThreads + 100);
                     }
 
-                    console.log('Total number of messages:', messages.length);
-                    return Promise.resolve(messages);
+                    console.log('Total number of messages:', threadStore.numOfThreads);
+                    return Promise.resolve();
                 }
             );
     }
@@ -107,14 +113,11 @@ function parseThreads(messages) {
     var multiRecipientsThreads = filterMultiOrgRecipient(threads);
     var githubDiscussions = filterGithubDiscussions(threads);
 
-    var questions = [];
-    var discussions = [];
-
     _.forOwn(singleRecipientThreads, function(threadMessages) {
         threadMessages = _.sortBy(threadMessages, 'date');
 
         if (threadMessages && threadMessages.length) {
-            questions.push({
+            threadStore.questions.push({
                 subject: threadMessages[0].subject,
                 asker: threadMessages[0].addresses.from.email,
                 answerer: threadMessages[0].addresses.to && threadMessages[0].addresses.to.length ?
@@ -126,7 +129,7 @@ function parseThreads(messages) {
 
     _.forOwn(multiRecipientsThreads, function(threadMessages) {
         if (threadMessages && threadMessages.length) {
-            discussions.push({
+            threadStore.discussions.push({
                 subject: threadMessages[0].subject,
                 recipients: _.filter(_.keys(threadMessages[0].person_info), function (address) {
                     return address !== account.emailAddress
@@ -138,7 +141,7 @@ function parseThreads(messages) {
 
     _.forOwn(githubDiscussions, function(threadMessages) {
         if (threadMessages && threadMessages.length) {
-            discussions.push({
+            threadStore.discussions.push({
                 subject: threadMessages[0].subject,
                 recipients: _.filter(_.keys(threadMessages[0].person_info), function (address) {
                     return address !== account.emailAddress
@@ -148,28 +151,26 @@ function parseThreads(messages) {
     });
 
     console.log('');
-    console.log('We have %s questions out of %s threads (%s %):', questions.length, numOfThreads,
-        ((questions.length / numOfThreads) * 100));
+    console.log('We have %s questions out of %s threads (%s %):', threadStore.questions.length, numOfThreads,
+        ((threadStore.questions.length / numOfThreads) * 100));
     console.log('');
 
-    _.forEach(questions, function(question) {
+    _.forEach(threadStore.questions, function(question) {
        console.log('Question: "%s" - "%s" asking "%s"', question.subject, question.asker, question.answerer);
     });
 
     console.log('');
-    console.log('We have %s discussions out of %s threads (%s %):', discussions.length, numOfThreads,
-        ((discussions.length / numOfThreads) * 100));
+    console.log('We have %s discussions out of %s threads (%s %):', threadStore.discussions.length, numOfThreads,
+        ((threadStore.discussions.length / numOfThreads) * 100));
     console.log('');
 
-    _.forEach(discussions, function(discussion) {
+    _.forEach(threadStore.discussions, function(discussion) {
         console.log('Discussion: "%s" - between [%s]', discussion.subject, discussion.recipients.toString());
     });
 
-    return Promise.resolve({
-        questions: questions,
-        discussions: discussions,
-        stats: calcStatsForThreads(_.union(questions, discussions))
-    });
+    threadStore.numOfThreads += messages.length;
+
+    return Promise.resolve(messages);
 }
 
 function filterSingleRecipient(threads) {
@@ -218,8 +219,6 @@ function calcStatsForSingleThread(messages) {
             responseTimes.push(nextMessage.date - message.date);
         }
     });
-
-    console.log('responseTimes:', responseTimes);
 
     return {
         average: _.sum(responseTimes) / responseTimes.length,
@@ -288,8 +287,8 @@ function isGithub(message) {
 }
 
 function start() {
-    console.log('Init done, starting fetch:', ((new Date().getTime() - debugStart) / 1000));
-    return fetchThreads().then(parseThreads).catch(error);
+    console.log('Starting fetch:', ((new Date().getTime() - debugStart) / 1000));
+    return fetchThreads().catch(error);
 }
 
 function error(err) {
@@ -306,40 +305,24 @@ app.listen(3000, function () {
         function() {
             console.log('init done');
         }
-    );
+    ).then(start);
 });
 
-app.get('/api/threads', function (req, res) {
-    console.log('GET /api/threads');
+app.get('/api/questions', function (req, res) {
+    console.log('GET /api/questions');
 
-    // var threads = [
-    //     {
-    //         id: 1,
-    //         subject: 'Question #1',
-    //         from: 'daniel.wolf@ravellosystems.com',
-    //         to: 'ben.bracha@ravellosystems.com',
-    //         type: 'QuestionsPage'
-    //     },
-    //     {
-    //         id: 2,
-    //         subject: 'Question #2',
-    //         from: 'yaron.peri@ravellosystems.com',
-    //         to: 'daniel.wolf@ravellosystems.com',
-    //         type: 'QuestionsPage'
-    //     },
-    //     {
-    //         id: 3,
-    //         subject: 'Discussion #3',
-    //         from: 'yaron.peri@ravellosystems.com',
-    //         to: 'daniel.wolf@ravellosystems.com',
-    //         type: 'DiscussionsPage'
-    //     }
-    // ];
+    var fromIndex = req.query.fromIndex || 0;
+    var toIndex = req.query.toIndex || 100;
 
-    start().then(
-        function(result) {
-            res.json(result);
-        }
-    );
+    res.json(threadStore.questions.slice(fromIndex, toIndex));
+});
+
+app.get('/api/discussions', function (req, res) {
+    console.log('GET /api/discussions');
+
+    var fromIndex = req.query.fromIndex || 0;
+    var toIndex = req.query.toIndex || 100;
+
+    res.json(threadStore.discussions.slice(fromIndex, toIndex));
 });
 
