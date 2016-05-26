@@ -29,13 +29,10 @@ function init() {
     };
 
     googleContacts = new GoogleContacts({
-        token: 'ya29..ugLgssFyC-I8u3nLnZFE9S8ISIb8oBZMcg9vXAiuMlHyLHOj5ESEA5GpcDcSd3vsRQ'
+        token: ''
     });
 
     cioClient = ContextIO({
-        key: 'b4b3pif1',
-        secret: 'VPFa8U4jWbi79bgP',
-        version: '2.0'
     });
 
     return cioClient.accounts('5708ecd4ca2712cc3f8b4569').get().then(
